@@ -1,13 +1,28 @@
 import math
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 
 from models import Building, BuildingScore, ScoreBreakdown, BuildingsResponse, RainfallResponse
 from scoring import score_building
-from data import get_annual_rainfall, get_water_price
+from data import get_annual_rainfall, get_water_price, fetch_all_building_footprints
 
-app = FastAPI(title="RainUSE Nexus API", version="1.0.0")
+# ---------------------------------------------------------------------------
+# Startup — fetch real building footprints from Overpass/OSM once
+# ---------------------------------------------------------------------------
+ALL_BUILDINGS: list[Building] = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global ALL_BUILDINGS
+    footprints = await fetch_all_building_footprints(_RAW_BUILDINGS)
+    ALL_BUILDINGS = [_build(r, footprints.get(r[0])) for r in _RAW_BUILDINGS]
+    yield
+
+
+app = FastAPI(title="RainUSE Nexus API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,23 +53,20 @@ ANNUAL_RAINFALL_MM = 863.0
 
 
 def building_polygon(lat: float, lon: float, area_m2: float) -> dict:
-    """Rectangular GeoJSON polygon centered on lat/lon with the correct footprint area."""
+    """Fallback: rectangular GeoJSON polygon centered on lat/lon."""
     lat_m = 111_320.0
     lon_m = 111_320.0 * math.cos(math.radians(lat))
-
-    aspect = 1.6                       # typical commercial block shape
+    aspect = 1.6
     width = math.sqrt(area_m2 / aspect)
     length = width * aspect
-
-    hw = (width / 2) / lon_m           # half-width in degrees
-    hl = (length / 2) / lat_m          # half-length in degrees
-
+    hw = (width / 2) / lon_m
+    hl = (length / 2) / lat_m
     ring = [
         [lon - hw, lat - hl],
         [lon + hw, lat - hl],
         [lon + hw, lat + hl],
         [lon - hw, lat + hl],
-        [lon - hw, lat - hl],           # close the ring
+        [lon - hw, lat - hl],
     ]
     return {"type": "Polygon", "coordinates": [ring]}
 
@@ -117,7 +129,7 @@ _RAW_BUILDINGS = [
 ]
 
 
-def _build(row: tuple) -> Building:
+def _build(row: tuple, geometry: Optional[dict] = None) -> Building:
     bid, name, address, lat, lon, roof, floors, btype, sbti, esg = row
     price = get_water_price("TX")
     s = score_building(
@@ -128,10 +140,8 @@ def _build(row: tuple) -> Building:
         mentions_water_esg=esg,
     )
     breakdown = ScoreBreakdown(**s.pop("breakdown"))
-
     monthly_rainfall_mm = [round(ANNUAL_RAINFALL_MM * f, 1) for f in MONTHLY_FRACTIONS]
     monthly_harvest_m3 = [round(roof * (mm / 1000) * 0.85, 2) for mm in monthly_rainfall_mm]
-
     return Building(
         id=bid,
         name=name,
@@ -143,7 +153,7 @@ def _build(row: tuple) -> Building:
         roof_area_m2=roof,
         floors=floors,
         building_type=btype,
-        geometry=building_polygon(lat, lon, roof),
+        geometry=geometry or building_polygon(lat, lon, roof),
         score=BuildingScore(
             **s,
             breakdown=breakdown,
@@ -151,9 +161,7 @@ def _build(row: tuple) -> Building:
             monthly_harvest_m3=monthly_harvest_m3,
         ),
     )
-
-
-ALL_BUILDINGS = [_build(r) for r in _RAW_BUILDINGS]
+# ALL_BUILDINGS is populated in the lifespan startup above
 
 
 # ---------------------------------------------------------------------------

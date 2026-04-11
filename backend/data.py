@@ -1,4 +1,6 @@
+import math
 import httpx
+from typing import Optional
 
 # Commercial water prices (USD/m³) by US state — sourced from worldpopulationreview.com
 WATER_PRICES_USD_PER_M3: dict[str, float] = {
@@ -14,6 +16,86 @@ WATER_PRICES_USD_PER_M3: dict[str, float] = {
     "VA": 4.60, "VT": 3.80, "WA": 4.10, "WI": 3.30, "WV": 6.20,
     "WY": 3.20,
 }
+
+
+# ---------------------------------------------------------------------------
+# Overpass / real building footprint helpers
+# ---------------------------------------------------------------------------
+
+def _way_to_polygon(element: dict) -> Optional[dict]:
+    """Convert an Overpass way element (with out geom) to a GeoJSON Polygon."""
+    geom = element.get("geometry", [])
+    if len(geom) < 4:
+        return None
+    coords = [[g["lon"], g["lat"]] for g in geom]
+    if coords[0] != coords[-1]:
+        coords.append(coords[0])
+    return {"type": "Polygon", "coordinates": [coords]}
+
+
+def _way_centroid(element: dict) -> tuple[float, float]:
+    """Return (lat, lon) centroid of an Overpass way."""
+    geom = element.get("geometry", [])
+    if not geom:
+        return 0.0, 0.0
+    return (
+        sum(g["lat"] for g in geom) / len(geom),
+        sum(g["lon"] for g in geom) / len(geom),
+    )
+
+
+def _dist_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Approximate distance in metres between two lat/lon points."""
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return 6_371_000 * 2 * math.asin(math.sqrt(a))
+
+
+async def fetch_all_building_footprints(buildings_data: list) -> dict[str, dict]:
+    """
+    Single Overpass batch query for real building polygons for all 28 seed buildings.
+    Returns dict of building_id -> GeoJSON Polygon.
+    Falls back gracefully if Overpass is unavailable.
+    """
+    union_parts = "\n".join(
+        f'way["building"](around:100,{lat},{lon});'
+        for _, _, _, lat, lon, *_ in buildings_data
+    )
+    query = f"[out:json][timeout:30];\n(\n{union_parts}\n);\nout geom;"
+
+    try:
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            resp = await client.post(
+                "https://overpass-api.de/api/interpreter",
+                data={"data": query},
+            )
+            resp.raise_for_status()
+            elements = [e for e in resp.json().get("elements", []) if e.get("type") == "way"]
+    except Exception:
+        return {}
+
+    results: dict[str, dict] = {}
+    for bid, _, _, seed_lat, seed_lon, *_ in buildings_data:
+        best_elem = None
+        best_dist = float("inf")
+        for elem in elements:
+            clat, clon = _way_centroid(elem)
+            dist = _dist_m(seed_lat, seed_lon, clat, clon)
+            if dist < best_dist:
+                best_dist = dist
+                best_elem = elem
+        if best_elem and best_dist < 150:
+            poly = _way_to_polygon(best_elem)
+            if poly:
+                results[bid] = poly
+
+    return results
 
 
 def get_water_price(state: str) -> float:
