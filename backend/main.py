@@ -7,6 +7,7 @@ from typing import Optional
 from models import Building, BuildingScore, ScoreBreakdown, BuildingsResponse, RainfallResponse
 from scoring import score_building
 from data import get_annual_rainfall, get_water_price, fetch_all_building_footprints
+from cv_buildings import get_buildings_in_bounds
 
 # ---------------------------------------------------------------------------
 # Startup — fetch real building footprints from Overpass/OSM once
@@ -259,3 +260,41 @@ async def get_stats():
         "medium_viability_count": sum(1 for s in scores if 33 <= s < 67),
         "low_viability_count": sum(1 for s in scores if s < 33),
     }
+
+
+@app.get("/api/detect")
+def detect_buildings(
+    south: float,
+    west: float,
+    north: float,
+    east: float,
+):
+    raw = get_buildings_in_bounds(south, west, north, east)
+
+    results = []
+    for b in raw:
+        price = get_water_price("TX")
+        s = score_building(
+            roof_area_m2=b["area_m2"],
+            annual_rainfall_mm=ANNUAL_RAINFALL_MM,
+            water_price_per_m3=price,
+            has_sbti_target=False,
+            mentions_water_esg=False,
+        )
+        s.pop("breakdown")
+
+        results.append({
+            "osm_id": b["osm_id"],
+            "geometry": b["geometry"],
+            "area_m2": b["area_m2"],
+            "sqft": b["sqft"],
+            "confidence": b["confidence"],
+            "cooling_tower": b["cooling_tower"],
+            "score": s["total"],
+            "annual_value": s["annual_value"],
+            "harvestable_m3": s["harvestable_m3"],
+            "payback_years": s["payback_years"],
+            "rebate_available": s["rebate_available"],
+        })
+
+    return {"buildings": results, "total": len(results)}

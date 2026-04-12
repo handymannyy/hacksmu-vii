@@ -11,6 +11,8 @@ import { Layers, Droplets, Building2, ChevronDown, ChevronUp } from "lucide-reac
 import type { Building, RainfallGrid } from "../types";
 import { fetchRainfallGrid } from "../api";
 
+const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
+
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
 
 const YEARS = [2020, 2021, 2022, 2023, 2024] as const;
@@ -89,7 +91,31 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
   const [rainfallYear, setRainfallYear] = useState(2023);
   const [layerPanelOpen, setLayerPanelOpen] = useState(true);
   const [rainfallData, setRainfallData] = useState<RainfallGrid | null>(null);
+  const [detectedBuildings, setDetectedBuildings] = useState<any[]>([]);
+  const [detecting, setDetecting] = useState(false);
   const [rainfallLoading, setRainfallLoading] = useState(false);
+  const runDetection = useCallback(async () => {
+  if (!mapRef.current) return;
+  const bounds = mapRef.current.getBounds();
+  if (!bounds) return;
+  const zoom = mapRef.current.getZoom();
+  if (zoom < 13) return;
+  setDetecting(true);
+  try {
+    const url = new URL(`${API_BASE}/detect`, window.location.origin);
+    url.searchParams.set("south", String(bounds.getSouth()));
+    url.searchParams.set("west", String(bounds.getWest()));
+    url.searchParams.set("north", String(bounds.getNorth()));
+    url.searchParams.set("east", String(bounds.getEast()));
+    const res = await fetch(url.toString());
+    const data = await res.json();
+    setDetectedBuildings(data.buildings || []);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    setDetecting(false);
+  }
+}, []);
 
   useEffect(() => {
     if (!showRainfall) return;
@@ -158,6 +184,13 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
         cursor={hover ? "pointer" : "grab"}
       >
         <NavigationControl position="bottom-right" />
+        <button
+  onClick={runDetection}
+  disabled={detecting}
+  className="absolute top-3 right-12 z-10 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white shadow-lg"
+>
+  {detecting ? "Scanning..." : "Scan Area"}
+</button>
 
         {/* ── Rainfall heatmap ── */}
         {showRainfall && rainfallData && (
@@ -187,6 +220,46 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
             />
           </Source>
         )}
+
+        {/* ── CV Detected Buildings ── */}
+{detectedBuildings.length > 0 && (
+  <Source
+    id="cv-buildings"
+    type="geojson"
+    data={{
+      type: "FeatureCollection",
+      features: detectedBuildings.map((b) => ({
+        type: "Feature",
+        geometry: b.geometry,
+        properties: {
+          osm_id: b.osm_id,
+          sqft: b.sqft,
+          confidence: b.confidence,
+          score: b.score,
+          annual_value: b.annual_value,
+        },
+      })),
+    }}
+  >
+    <Layer
+      id="cv-buildings-fill"
+      type="fill"
+      paint={{
+        "fill-color": "#00f5ff",
+        "fill-opacity": 0.25,
+      }}
+    />
+    <Layer
+      id="cv-buildings-outline"
+      type="line"
+      paint={{
+        "line-color": "#00f5ff",
+        "line-width": 2,
+        "line-opacity": 0.9,
+      }}
+    />
+  </Source>
+)}
 
         {/* ── Building polygon footprints ── */}
         {showFootprints && (
