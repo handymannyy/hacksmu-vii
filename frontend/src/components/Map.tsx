@@ -80,9 +80,10 @@ interface Props {
   buildings: Building[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onDetect: (buildings: CVBuilding[]) => void;
 }
 
-export default function MapView({ buildings, selectedId, onSelect }: Props) {
+export default function MapView({ buildings, selectedId, onSelect, onDetect }: Props) {
   const mapRef = useRef<MapRef>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
 
@@ -114,6 +115,7 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
       mapRef.current.flyTo({ center: [lng, lat], zoom: 13, duration: 1800 });
       setDetectedBuildings([]);
       setSelectedCVBuilding(null);
+      onDetect([]);
     } catch (e) {
       console.error(e);
     } finally {
@@ -136,13 +138,15 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
     url.searchParams.set("east", String(bounds.getEast()));
     const res = await fetch(url.toString());
     const data = await res.json();
-    setDetectedBuildings(data.buildings || []);
+    const detected: CVBuilding[] = data.buildings || [];
+    setDetectedBuildings(detected);
+    onDetect(detected);
   } catch (e) {
     console.error(e);
   } finally {
     setDetecting(false);
   }
-}, []);
+}, [onDetect]);
 
   useEffect(() => {
     if (!showRainfall) return;

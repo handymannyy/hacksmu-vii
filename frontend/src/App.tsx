@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import type { Building, FilterState, Stats } from "./types";
+import type { Building, CVBuilding, FilterState, Stats } from "./types";
 import { fetchBuildings, fetchStats } from "./api";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
@@ -44,6 +44,24 @@ export default function App() {
     setSelectedId((prev) => (prev === id ? null : id));
   }, []);
 
+  const handleDetect = useCallback((detected: CVBuilding[]) => {
+    if (detected.length === 0) {
+      fetchStats().then(setStats).catch(console.error);
+      return;
+    }
+    const scores = detected.map((b) => b.score);
+    const total_annual_value = detected.reduce((sum, b) => sum + b.annual_value, 0);
+    setStats({
+      total_buildings: detected.length,
+      avg_score: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10,
+      max_score: Math.max(...scores),
+      total_annual_value,
+      high_viability_count:   scores.filter((s) => s >= 67).length,
+      medium_viability_count: scores.filter((s) => s >= 33 && s < 67).length,
+      low_viability_count:    scores.filter((s) => s < 33).length,
+    });
+  }, []);
+
   return (
     <div className="flex flex-col h-full">
       <Header
@@ -68,6 +86,7 @@ export default function App() {
           buildings={buildings}
           selectedId={selectedId}
           onSelect={handleSelect}
+          onDetect={handleDetect}
         />
 
         {selectedBuilding && (
