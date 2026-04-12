@@ -5,9 +5,10 @@ interface Props {
   stats: Stats | null;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  locationLabel: string;
 }
 
-export default function Header({ stats, sidebarOpen, onToggleSidebar }: Props) {
+export default function Header({ stats, sidebarOpen, onToggleSidebar, locationLabel }: Props) {
   return (
     <header className="glass z-20 flex items-center gap-3 px-4 h-14 shrink-0">
       {/* Logo */}
@@ -26,7 +27,7 @@ export default function Header({ stats, sidebarOpen, onToggleSidebar }: Props) {
       {/* City pill */}
       <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-sm">
         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-        <span className="text-slate-300">Austin, TX</span>
+        <span className="text-slate-300">{locationLabel}</span>
       </div>
 
       {/* Quick stats */}

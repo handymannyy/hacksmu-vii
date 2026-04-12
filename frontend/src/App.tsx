@@ -20,6 +20,7 @@ export default function App() {
   const [selectedId, setSelectedId]   = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading]         = useState(true);
+  const [locationLabel, setLocationLabel] = useState("Austin, TX");
 
   useEffect(() => {
     fetchStats().then(setStats).catch(console.error);
@@ -68,6 +69,7 @@ export default function App() {
         stats={stats}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((o) => !o)}
+        locationLabel={locationLabel}
       />
 
       <div className="flex flex-1 overflow-hidden relative">
@@ -87,6 +89,7 @@ export default function App() {
           selectedId={selectedId}
           onSelect={handleSelect}
           onDetect={handleDetect}
+          onLocationChange={setLocationLabel}
         />
 
         {selectedBuilding && (

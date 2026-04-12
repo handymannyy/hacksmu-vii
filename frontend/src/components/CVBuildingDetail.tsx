@@ -8,6 +8,18 @@ interface Props {
   onClose: () => void;
 }
 
+function scoreDescription(b: CVBuilding): string {
+  const tier = scoreLabel(b.score);
+  const size = b.sqft >= 100_000 ? "large-footprint" : b.sqft >= 50_000 ? "mid-size" : "smaller";
+  const cooling = b.cooling_tower ? " Cooling tower detected — additional water recycling opportunity." : "";
+  const payback = b.payback_years < 99 ? ` Est. payback: ${b.payback_years} yrs.` : "";
+  if (tier === "High")
+    return `High viability — ${size} roof with strong harvest potential and favorable ROI.${payback}${cooling}`;
+  if (tier === "Medium")
+    return `Moderate viability — ${size} roof with adequate harvest potential; verify local incentives.${payback}${cooling}`;
+  return `Low viability — limited harvest yield relative to install cost for this ${size} building.${payback}${cooling}`;
+}
+
 export default function CVBuildingDetail({ building: b, onClose }: Props) {
   const gallons = Math.round(b.harvestable_m3 * 264.172);
   const installCost = b.harvestable_m3 * 2.5;
@@ -51,7 +63,7 @@ export default function CVBuildingDetail({ building: b, onClose }: Props) {
           <div className="flex flex-col items-center py-2">
             <ScoreGauge score={b.score} size={150} />
             <p className="text-xs text-slate-500 mt-2 text-center px-4 max-w-xs">
-              Viability score based on roof area and local Austin rainfall — no ESG data available for detected buildings
+              {scoreDescription(b)}
             </p>
           </div>
 

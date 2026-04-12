@@ -7,7 +7,9 @@ import ReactMapGL, {
   type MapLayerMouseEvent,
 } from "react-map-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { Layers, Droplets, Building2, ChevronDown, ChevronUp, Search, Loader2 } from "lucide-react";
+import { Layers, Droplets, Building2, ChevronDown, ChevronUp } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { SearchBar } from "./ui/search-bar";
 import type { Building, CVBuilding, RainfallGrid } from "../types";
 import { fetchRainfallGrid } from "../api";
 import CVBuildingDetail from "./CVBuildingDetail";
@@ -81,9 +83,10 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onDetect: (buildings: CVBuilding[]) => void;
+  onLocationChange: (label: string) => void;
 }
 
-export default function MapView({ buildings, selectedId, onSelect, onDetect }: Props) {
+export default function MapView({ buildings, selectedId, onSelect, onDetect, onLocationChange }: Props) {
   const mapRef = useRef<MapRef>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
 
@@ -97,31 +100,17 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect }: P
   const [selectedCVBuilding, setSelectedCVBuilding] = useState<CVBuilding | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [rainfallLoading, setRainfallLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchLoading, setSearchLoading] = useState(false);
-
-  const runSearch = useCallback(async () => {
-    const q = searchQuery.trim();
-    if (!q || !MAPBOX_TOKEN || !mapRef.current) return;
-    setSearchLoading(true);
-    try {
-      const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us`
-      );
-      const data = await res.json();
-      const feature = data.features?.[0];
-      if (!feature) return;
-      const [lng, lat] = feature.center as [number, number];
+  const handleSearchRetrieve = useCallback(
+    (lng: number, lat: number, label: string) => {
+      if (!mapRef.current) return;
       mapRef.current.flyTo({ center: [lng, lat], zoom: 13, duration: 1800 });
       setDetectedBuildings([]);
       setSelectedCVBuilding(null);
       onDetect([]);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSearchLoading(false);
-    }
-  }, [searchQuery]);
+      if (label) onLocationChange(label);
+    },
+    [onDetect, onLocationChange]
+  );
 
   const runDetection = useCallback(async () => {
   if (!mapRef.current) return;
@@ -229,38 +218,54 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect }: P
 
         {/* ── Location search ── */}
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 w-80">
-          <div className="glass rounded-xl overflow-hidden flex items-center px-3 gap-2 shadow-lg ring-1 ring-slate-700/60 focus-within:ring-cyan-500/60 transition-shadow">
-            {searchLoading
-              ? <Loader2 className="w-3.5 h-3.5 text-slate-400 shrink-0 animate-spin" />
-              : <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            }
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
-              placeholder="Search location..."
-              className="flex-1 bg-transparent py-2 text-xs text-slate-200 placeholder-slate-500 outline-none"
-            />
-            {searchQuery && (
-              <button
-                onClick={runSearch}
-                disabled={searchLoading}
-                className="text-xs text-cyan-400 hover:text-cyan-300 font-medium disabled:opacity-50 shrink-0 transition-colors"
-              >
-                Go
-              </button>
-            )}
-          </div>
+          <SearchBar
+            accessToken={MAPBOX_TOKEN}
+            onRetrieve={handleSearchRetrieve}
+            placeholder="Search location..."
+          />
         </div>
 
-        <button
-  onClick={runDetection}
-  disabled={detecting}
-  className="absolute top-3 right-12 z-10 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white shadow-lg"
->
-  {detecting ? "Scanning..." : "Scan Area"}
-</button>
+        {/* ── Scan button / scanning badge (centered below search bar) ── */}
+        <div className="absolute top-[54px] left-1/2 -translate-x-1/2 z-10 w-max">
+          <AnimatePresence mode="wait">
+            {detecting ? (
+              <motion.div
+                key="badge"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.2 }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium pointer-events-none"
+                style={{
+                  background: "rgba(0, 245, 255, 0.08)",
+                  border: "1px solid rgba(0, 245, 255, 0.3)",
+                  backdropFilter: "blur(12px)",
+                  color: "#00f5ff",
+                }}
+              >
+                <motion.span
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{ background: "#00f5ff" }}
+                  animate={{ opacity: [1, 0.2, 1] }}
+                  transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
+                />
+                Scanning area...
+              </motion.div>
+            ) : (
+              <motion.button
+                key="button"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.2 }}
+                onClick={runDetection}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 hover:bg-cyan-400 text-white shadow-lg"
+              >
+                Scan Area
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </div>
 
         {/* ── Rainfall heatmap ── */}
         {showRainfall && rainfallData && (
@@ -477,6 +482,20 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect }: P
         <p className="text-slate-600 pt-0.5 border-t border-slate-800 mt-1">Polygon size = roof area</p>
       </div>
 
+      {/* ── Scan pulse overlay ── */}
+      <AnimatePresence>
+        {detecting && (
+          <motion.div
+            className="absolute inset-0 pointer-events-none z-10"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 0.12, 0.04, 0.1, 0] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1.6, ease: "easeInOut" }}
+            style={{ background: "rgba(0, 245, 255, 1)" }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* ── CV Building detail panel ── */}
       {selectedCVBuilding && (
         <div className="absolute right-0 top-0 h-full z-20 flex">
@@ -530,7 +549,7 @@ function LayerToggle({
         className={`w-8 h-4 rounded-full relative flex-shrink-0 transition-colors ${active ? "bg-sky-500" : "bg-slate-700"}`}
       >
         <span
-          className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${active ? "translate-x-4" : "translate-x-0.5"}`}
+          className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all ${active ? "left-[18px]" : "left-0.5"}`}
         />
       </button>
     </div>
