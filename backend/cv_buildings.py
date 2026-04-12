@@ -28,7 +28,7 @@ def get_buildings_in_bounds(south: float, west: float, north: float, east: float
         area_m2 = _polygon_area_m2(coords)
         sqft = area_m2 * 10.764
 
-        if sqft < 5000:
+        if sqft < 100000:
             continue
 
         confidence = _confidence(area_m2)
