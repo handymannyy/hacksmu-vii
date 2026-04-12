@@ -17,7 +17,7 @@ export default function Header({ stats, sidebarOpen, onToggleSidebar, locationLa
           <Droplets className="w-4 h-4 text-sky-400" />
         </div>
         <span className="font-bold text-slate-100 tracking-tight">
-          RainUSE <span className="text-sky-400">Nexus</span>
+          Project <span className="text-sky-400">Jensen</span>
         </span>
       </div>
 

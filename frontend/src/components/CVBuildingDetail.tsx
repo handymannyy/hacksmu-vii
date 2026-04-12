@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { X, Droplets, DollarSign, RotateCcw, TrendingUp, Zap, Wind } from "lucide-react";
 import type { CVBuilding } from "../types";
 import { scoreColor, scoreLabel } from "../types";
 import ScoreGauge from "./ScoreGauge";
+import ProposalModal from "./ProposalModal";
 
 interface Props {
   building: CVBuilding;
@@ -24,6 +26,7 @@ export default function CVBuildingDetail({ building: b, onClose }: Props) {
   const gallons = Math.round(b.harvestable_m3 * 264.172);
   const installCost = b.harvestable_m3 * 2.5;
   const isPrimaryTarget = b.sqft >= 100_000;
+  const [showProposal, setShowProposal] = useState(false);
 
   return (
     <aside className="glass flex flex-col w-[460px] shrink-0 overflow-hidden z-10 h-full overflow-y-auto scrollbar-thin">
@@ -163,12 +166,15 @@ export default function CVBuildingDetail({ building: b, onClose }: Props) {
             color: scoreColor(b.score),
             border: `1px solid ${scoreColor(b.score)}44`,
           }}
-          onClick={() => alert(`Generating Grundfos proposal for OSM building ${b.osm_id}…`)}
+          onClick={() => setShowProposal(true)}
         >
           <Zap className="w-4 h-4" />
-          Generate Grundfos Proposal
+          Ask Jensen
         </button>
       </div>
+      {showProposal && (
+        <ProposalModal building={b} onClose={() => setShowProposal(false)} />
+      )}
     </aside>
   );
 }
