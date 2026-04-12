@@ -7,9 +7,10 @@ import ReactMapGL, {
   type MapLayerMouseEvent,
 } from "react-map-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { Layers, Droplets, Building2, ChevronDown, ChevronUp } from "lucide-react";
-import type { Building, RainfallGrid } from "../types";
+import { Layers, Droplets, Building2, ChevronDown, ChevronUp, Search, Loader2 } from "lucide-react";
+import type { Building, CVBuilding, RainfallGrid } from "../types";
 import { fetchRainfallGrid } from "../api";
+import CVBuildingDetail from "./CVBuildingDetail";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
@@ -91,9 +92,35 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
   const [rainfallYear, setRainfallYear] = useState(2023);
   const [layerPanelOpen, setLayerPanelOpen] = useState(true);
   const [rainfallData, setRainfallData] = useState<RainfallGrid | null>(null);
-  const [detectedBuildings, setDetectedBuildings] = useState<any[]>([]);
+  const [detectedBuildings, setDetectedBuildings] = useState<CVBuilding[]>([]);
+  const [selectedCVBuilding, setSelectedCVBuilding] = useState<CVBuilding | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [rainfallLoading, setRainfallLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+
+  const runSearch = useCallback(async () => {
+    const q = searchQuery.trim();
+    if (!q || !MAPBOX_TOKEN || !mapRef.current) return;
+    setSearchLoading(true);
+    try {
+      const res = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}&country=us`
+      );
+      const data = await res.json();
+      const feature = data.features?.[0];
+      if (!feature) return;
+      const [lng, lat] = feature.center as [number, number];
+      mapRef.current.flyTo({ center: [lng, lat], zoom: 13, duration: 1800 });
+      setDetectedBuildings([]);
+      setSelectedCVBuilding(null);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchQuery]);
+
   const runDetection = useCallback(async () => {
   if (!mapRef.current) return;
   const bounds = mapRef.current.getBounds();
@@ -131,7 +158,7 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
 
   const onMouseMove = useCallback((e: MapLayerMouseEvent) => {
     const feat = e.features?.[0];
-    if (feat?.properties) {
+    if (feat?.layer?.id === "buildings-fill" && feat.properties) {
       setHover({
         x: e.point.x,
         y: e.point.y,
@@ -149,9 +176,17 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
   const onClick = useCallback(
     (e: MapLayerMouseEvent) => {
       const feat = e.features?.[0];
-      if (feat?.properties?.id) onSelect(feat.properties.id as string);
+      if (!feat?.properties) return;
+      if (feat.layer?.id === "cv-buildings-fill") {
+        const osmId = feat.properties.osm_id as number;
+        const cvb = detectedBuildings.find((b) => b.osm_id === osmId) ?? null;
+        setSelectedCVBuilding(cvb);
+      } else if (feat.properties.id) {
+        setSelectedCVBuilding(null);
+        onSelect(feat.properties.id as string);
+      }
     },
-    [onSelect]
+    [onSelect, detectedBuildings]
   );
 
   if (!MAPBOX_TOKEN) {
@@ -176,7 +211,10 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
         initialViewState={{ latitude: 30.305, longitude: -97.743, zoom: 10.5, pitch: 30, bearing: -8 }}
         mapStyle="mapbox://styles/mapbox/satellite-streets-v12"
         mapboxAccessToken={MAPBOX_TOKEN}
-        interactiveLayerIds={showFootprints ? ["buildings-fill"] : []}
+        interactiveLayerIds={[
+          ...(showFootprints ? ["buildings-fill"] : []),
+          ...(detectedBuildings.length > 0 ? ["cv-buildings-fill"] : []),
+        ]}
         onMouseMove={onMouseMove}
         onMouseLeave={() => setHover(null)}
         onClick={onClick}
@@ -184,6 +222,34 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
         cursor={hover ? "pointer" : "grab"}
       >
         <NavigationControl position="bottom-right" />
+
+        {/* ── Location search ── */}
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 w-80">
+          <div className="glass rounded-xl overflow-hidden flex items-center px-3 gap-2 shadow-lg ring-1 ring-slate-700/60 focus-within:ring-cyan-500/60 transition-shadow">
+            {searchLoading
+              ? <Loader2 className="w-3.5 h-3.5 text-slate-400 shrink-0 animate-spin" />
+              : <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            }
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+              placeholder="Search location..."
+              className="flex-1 bg-transparent py-2 text-xs text-slate-200 placeholder-slate-500 outline-none"
+            />
+            {searchQuery && (
+              <button
+                onClick={runSearch}
+                disabled={searchLoading}
+                className="text-xs text-cyan-400 hover:text-cyan-300 font-medium disabled:opacity-50 shrink-0 transition-colors"
+              >
+                Go
+              </button>
+            )}
+          </div>
+        </div>
+
         <button
   onClick={runDetection}
   disabled={detecting}
@@ -406,6 +472,16 @@ export default function MapView({ buildings, selectedId, onSelect }: Props) {
         ))}
         <p className="text-slate-600 pt-0.5 border-t border-slate-800 mt-1">Polygon size = roof area</p>
       </div>
+
+      {/* ── CV Building detail panel ── */}
+      {selectedCVBuilding && (
+        <div className="absolute right-0 top-0 h-full z-20 flex">
+          <CVBuildingDetail
+            building={selectedCVBuilding}
+            onClose={() => setSelectedCVBuilding(null)}
+          />
+        </div>
+      )}
 
       {/* ── Hover tooltip ── */}
       {hover && (

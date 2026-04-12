@@ -80,6 +80,20 @@ export interface RainfallGrid {
   meta: RainfallGridMeta;
 }
 
+export interface CVBuilding {
+  osm_id: number;
+  geometry: object;
+  area_m2: number;
+  sqft: number;
+  confidence: number;
+  cooling_tower: boolean;
+  score: number;
+  annual_value: number;
+  harvestable_m3: number;
+  payback_years: number;
+  rebate_available: number;
+}
+
 export function scoreColor(score: number): string {
   if (score >= 67) return "#22c55e";
   if (score >= 33) return "#f59e0b";

@@ -6,16 +6,39 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 def get_buildings_in_bounds(south: float, west: float, north: float, east: float):
     query = f"""
     [out:json][timeout:25];
-    way["building"]({south},{west},{north},{east});
+    (
+      way["building"]({south},{west},{north},{east});
+      node["man_made"="cooling_tower"]({south},{west},{north},{east});
+      way["man_made"="cooling_tower"]({south},{west},{north},{east});
+    );
     out geom;
     """
     resp = requests.post(OVERPASS_URL, data=query, timeout=30)
     resp.raise_for_status()
     data = resp.json()
 
+    elements = data.get("elements", [])
+
+    # Collect cooling tower centroids from the same response
+    cooling_tower_points = []
+    for el in elements:
+        if el.get("tags", {}).get("man_made") != "cooling_tower":
+            continue
+        if el["type"] == "node":
+            cooling_tower_points.append((el["lon"], el["lat"]))
+        elif el["type"] == "way" and el.get("geometry"):
+            lons = [p["lon"] for p in el["geometry"]]
+            lats = [p["lat"] for p in el["geometry"]]
+            cooling_tower_points.append((
+                sum(lons) / len(lons),
+                sum(lats) / len(lats),
+            ))
+
     results = []
-    for el in data.get("elements", []):
+    for el in elements:
         if el.get("type") != "way" or not el.get("geometry"):
+            continue
+        if el.get("tags", {}).get("man_made") == "cooling_tower":
             continue
 
         coords = [[p["lon"], p["lat"]] for p in el["geometry"]]
@@ -32,6 +55,9 @@ def get_buildings_in_bounds(south: float, west: float, north: float, east: float
             continue
 
         confidence = _confidence(area_m2)
+        has_cooling_tower = any(
+            _point_in_polygon(ct, coords) for ct in cooling_tower_points
+        )
 
         results.append({
             "osm_id": el["id"],
@@ -39,7 +65,7 @@ def get_buildings_in_bounds(south: float, west: float, north: float, east: float
             "area_m2": round(area_m2),
             "sqft": round(sqft),
             "confidence": confidence,
-            "cooling_tower": False,
+            "cooling_tower": has_cooling_tower,
         })
 
     return results
@@ -56,6 +82,21 @@ def _polygon_area_m2(coords):
         lon2, lat2 = math.radians(coords[(i+1) % n][0]), math.radians(coords[(i+1) % n][1])
         total += (lon2 - lon1) * (2 + math.sin(lat1) + math.sin(lat2))
     return abs(total * R * R / 2)
+
+
+def _point_in_polygon(point: tuple, ring: list) -> bool:
+    """Ray casting point-in-polygon test. ring is [[lon, lat], ...]."""
+    px, py = point
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
 
 
 def _confidence(area_m2):
