@@ -1,4 +1,4 @@
-# RainUSE Nexus
+# Project Jensen
 
 Commercial rainwater harvesting viability scoring on an interactive satellite map.  
 **Stack:** FastAPI · React + Vite · Mapbox GL · Tailwind CSS
