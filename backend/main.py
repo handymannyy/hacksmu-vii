@@ -1,4 +1,5 @@
 import math
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,9 @@ from models import BuildingsResponse, RainfallResponse
 from scoring import score_building
 from data import get_annual_rainfall, get_water_price
 from cv_buildings import get_buildings_in_bounds
+from weather_service import compute_cells_batch, fetch_precipitation_forecast
+from financial_service import aggregate_financial_score
+from climate_risk_service import calculate_resilience_score
 
 
 @asynccontextmanager
@@ -177,3 +181,132 @@ def detect_buildings(
         })
 
     return {"buildings": results, "total": len(results)}
+
+
+# ---------------------------------------------------------------------------
+# Global Climate Heatmap
+# ---------------------------------------------------------------------------
+
+@app.get("/api/global-climate-heatmap")
+async def global_climate_heatmap(
+    south:      float = Query(-60.0),
+    west:       float = Query(-180.0),
+    north:      float = Query(75.0),
+    east:       float = Query(180.0),
+    datasource: str   = Query("precipitation",
+                              regex="^(precipitation|drought|water_stress|resilience|combined)$"),
+    resolution: float = Query(2.0, ge=0.5, le=10.0),
+):
+    """
+    Global climate heatmap as a GeoJSON FeatureCollection of Point features.
+    Each point represents one grid cell; use a Mapbox heatmap layer for rendering.
+
+    datasource values:
+      precipitation — annual mm (inverted: low=red, high=blue)
+      drought       — drought severity index (high=red)
+      water_stress  — Falkenmark water stress (high=red)
+      resilience    — harvesting opportunity (high=blue)
+      combined      — weighted composite (dry/stressed=red, wet=blue)
+    """
+    lat_range = north - south
+    lon_range = (east - west) if east >= west else (360 + east - west)
+
+    # Auto-cap cells to keep response < ~1 500 features
+    max_cells = 1200
+    estimated = (lat_range / resolution) * (lon_range / resolution)
+    if estimated > max_cells:
+        resolution = math.sqrt((lat_range * lon_range) / max_cells)
+        resolution = max(0.5, round(resolution * 2) / 2)
+
+    # Build grid coordinates
+    coords: list[tuple[float, float]] = []
+    lat = south + resolution / 2
+    while lat < north:
+        lon_val = west + resolution / 2
+        while lon_val < east:
+            coords.append((round(lat, 4), round(lon_val, 4)))
+            lon_val += resolution
+        lat += resolution
+
+    cells = await compute_cells_batch(coords, concurrency=20)
+
+    features = []
+    for cell in cells:
+        if "error" in cell:
+            continue
+
+        raw = cell.get("combined_heatmap_value", 0.5)
+
+        if datasource == "precipitation":
+            # 0 = very wet (blue), 1 = very dry (red)
+            val = max(0.0, min(1.0, 1.0 - cell.get("precipitation_mm", 1000) / 3000))
+        elif datasource == "drought":
+            val = cell.get("drought_severity", 0) / 100
+        elif datasource == "water_stress":
+            val = cell.get("water_stress_index", 50) / 100
+        elif datasource == "resilience":
+            # invert: high resilience = blue (low heatmap value)
+            val = 1.0 - max(0.0, min(1.0, cell.get("drought_severity", 50) / 100 * 0.5
+                                     + cell.get("water_stress_index", 50) / 100 * 0.5))
+        else:
+            val = raw
+
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [cell["lon"], cell["lat"]]},
+            "properties": {
+                "precipitation_mm":        cell.get("precipitation_mm", 0),
+                "precipitation_anomaly_pct": cell.get("precipitation_anomaly_pct", 0),
+                "water_stress_index":      cell.get("water_stress_index", 50),
+                "drought_severity":        cell.get("drought_severity", 50),
+                "flood_risk_pct":          cell.get("flood_risk_pct", 10),
+                "temperature_anomaly_c":   cell.get("temperature_anomaly_c", 1.2),
+                "combined_heatmap_value":  round(val, 3),
+                "data_source":             cell.get("source", "estimate"),
+            },
+        })
+
+    vals = [f["properties"]["combined_heatmap_value"] for f in features]
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "meta": {
+            "datasource": datasource,
+            "resolution_deg": resolution,
+            "cells": len(features),
+            "min_value": round(min(vals), 3) if vals else 0,
+            "max_value": round(max(vals), 3) if vals else 1,
+        },
+    }
+
+
+@app.get("/api/climate-detail")
+async def climate_detail(
+    lat:     float = Query(...),
+    lon:     float = Query(...),
+    country: str   = Query("US"),
+    state:   str   = Query(None),
+):
+    """
+    Full climate + financial detail for a clicked map location.
+    Used by the ClimateInfoPanel when a user clicks the heatmap.
+    """
+    precip_task   = fetch_precipitation_forecast(lat, lon, days=14)
+    financial_task = aggregate_financial_score(lat, lon, country, state or "TX")
+    resilience_task = calculate_resilience_score(lat, lon)
+
+    from weather_service import fetch_historical_precipitation
+    historical_task = fetch_historical_precipitation(lat, lon)
+
+    historical, forecast, financial, resilience = await asyncio.gather(
+        historical_task, precip_task, financial_task, resilience_task
+    )
+
+    return {
+        "lat": lat,
+        "lon": lon,
+        "precipitation": historical,
+        "forecast": forecast,
+        "financial": financial,
+        "resilience": resilience,
+    }

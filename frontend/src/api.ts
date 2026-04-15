@@ -1,4 +1,4 @@
-import type { Building, Stats, RainfallGrid } from "./types";
+import type { Building, Stats, RainfallGrid, ClimateGrid, ClimateDetail, ClimateDataSource } from "./types";
 
 const BASE = import.meta.env.VITE_API_URL ?? "/api";
 
@@ -36,4 +36,26 @@ export async function fetchStats(): Promise<Stats> {
 
 export async function fetchRainfallGrid(year: number = 2023): Promise<RainfallGrid> {
   return get<RainfallGrid>("/rainfall-grid", { year });
+}
+
+export interface ClimateGridParams {
+  south?: number;
+  west?: number;
+  north?: number;
+  east?: number;
+  datasource?: ClimateDataSource;
+  resolution?: number;
+}
+
+export async function fetchClimateGrid(params: ClimateGridParams = {}): Promise<ClimateGrid> {
+  return get<ClimateGrid>("/global-climate-heatmap", params as Record<string, string | number>);
+}
+
+export async function fetchClimateDetail(
+  lat: number,
+  lon: number,
+  country = "US",
+  state?: string,
+): Promise<ClimateDetail> {
+  return get<ClimateDetail>("/climate-detail", { lat, lon, country, ...(state ? { state } : {}) });
 }

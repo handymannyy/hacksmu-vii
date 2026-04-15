@@ -94,6 +94,67 @@ export interface CVBuilding {
   rebate_available: number;
 }
 
+// ── Global Climate Heatmap types ─────────────────────────────────────────────
+
+export type ClimateDataSource = "precipitation" | "drought" | "water_stress" | "resilience" | "combined";
+
+export interface ClimateCell {
+  precipitation_mm: number;
+  precipitation_anomaly_pct: number;
+  water_stress_index: number;
+  drought_severity: number;
+  flood_risk_pct: number;
+  temperature_anomaly_c: number;
+  combined_heatmap_value: number;
+  data_source: string;
+}
+
+export interface ClimateGrid {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    geometry: { type: "Point"; coordinates: [number, number] };
+    properties: ClimateCell;
+  }>;
+  meta: {
+    datasource: ClimateDataSource;
+    resolution_deg: number;
+    cells: number;
+    min_value: number;
+    max_value: number;
+  };
+}
+
+export interface ClimateDetail {
+  lat: number;
+  lon: number;
+  precipitation: {
+    annual_avg_mm: number;
+    monthly_avg_mm: number[];
+    source: string;
+  };
+  forecast: {
+    dates: string[];
+    precipitation_mm: (number | null)[];
+    precipitation_probability: (number | null)[];
+    source: string;
+  };
+  financial: {
+    financial_viability_coefficient: number;
+    water_cost: { water_cost_per_m3: number; currency: string; source: string };
+    stormwater_fee: { fee_per_sqft_impervious_usd: number; source: string };
+    incentives: Array<{ name: string; type: string; value: string; citation?: string; url?: string }>;
+    annual_water_savings_usd: number | null;
+  };
+  resilience: {
+    resilience_score: number;
+    opportunity_level: "High" | "Medium" | "Low";
+    annual_precip_mm: number;
+    climate_exposure: number;
+    precip_opportunity: number;
+  };
+}
+
 export function scoreColor(score: number): string {
   if (score >= 67) return "#22c55e";
   if (score >= 33) return "#f59e0b";
