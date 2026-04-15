@@ -109,6 +109,9 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
   const [climateLoading, setClimateLoading] = useState(false);
   const [climateDetail, setClimateDetail] = useState<ClimateDetail | null>(null);
   const [climateDetailLoading, setClimateDetailLoading] = useState(false);
+  const [climateHover, setClimateHover] = useState<{
+    x: number; y: number; precip: number; value: number; lat: number; lon: number;
+  } | null>(null);
   const handleSearchRetrieve = useCallback(
     (lng: number, lat: number, label: string) => {
       if (!mapRef.current) return;
@@ -155,25 +158,28 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
       .finally(() => setRainfallLoading(false));
   }, [showRainfall, rainfallYear]);
 
-  // ── Fetch global climate grid whenever layer is enabled or datasource changes ──
-  useEffect(() => {
-    if (!showClimateLayer) { setClimateGrid(null); return; }
-    setClimateLoading(true);
+  // ── Climate grid loader (called on layer toggle, datasource change, map move) ──
+  const climateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadClimateGrid = useCallback(() => {
+    if (!showClimateLayer) return;
     const map = mapRef.current;
     const bounds = map?.getBounds();
     const zoom = map?.getZoom() ?? 2;
 
-    // Adaptive resolution: coarser at low zoom to limit cell count
+    // Adaptive resolution: coarser when zoomed out
     const resolution =
-      zoom < 4 ? 5.0
-      : zoom < 6 ? 3.0
-      : zoom < 9 ? 1.5
+      zoom < 3 ? 5.0
+      : zoom < 5 ? 3.0
+      : zoom < 7 ? 2.0
+      : zoom < 9 ? 1.0
       : 0.5;
 
+    setClimateLoading(true);
     fetchClimateGrid({
-      south: bounds?.getSouth() ?? -60,
+      south: Math.max(-85, bounds?.getSouth() ?? -60),
       west:  bounds?.getWest()  ?? -180,
-      north: bounds?.getNorth() ?? 75,
+      north: Math.min(85,  bounds?.getNorth() ?? 75),
       east:  bounds?.getEast()  ?? 180,
       datasource: climateDataSource,
       resolution,
@@ -181,8 +187,19 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
       .then(setClimateGrid)
       .catch(console.error)
       .finally(() => setClimateLoading(false));
+  }, [showClimateLayer, climateDataSource]);
+
+  useEffect(() => {
+    if (!showClimateLayer) { setClimateGrid(null); return; }
+    loadClimateGrid();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showClimateLayer, climateDataSource]);
+
+  const handleMoveEnd = useCallback(() => {
+    if (!showClimateLayer) return;
+    if (climateTimerRef.current) clearTimeout(climateTimerRef.current);
+    climateTimerRef.current = setTimeout(loadClimateGrid, 400);
+  }, [showClimateLayer, loadClimateGrid]);
 
   const polygonGeoJSON = toPolygonGeoJSON(buildings);
   const centroidGeoJSON = toCentroidGeoJSON(buildings);
@@ -190,6 +207,7 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
   const onMouseMove = useCallback((e: MapLayerMouseEvent) => {
     const feat = e.features?.[0];
     if (feat?.layer?.id === "buildings-fill" && feat.properties) {
+      setClimateHover(null);
       setHover({
         x: e.point.x,
         y: e.point.y,
@@ -199,8 +217,19 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
         roof_area_m2: feat.properties.roof_area_m2 as number,
         building_type: feat.properties.building_type as string,
       });
+    } else if (feat?.layer?.id === "climate-fill" && feat.properties) {
+      setHover(null);
+      setClimateHover({
+        x: e.point.x,
+        y: e.point.y,
+        precip: feat.properties.precipitation_mm as number,
+        value: feat.properties.combined_heatmap_value as number,
+        lat: feat.properties.lat as number,
+        lon: feat.properties.lon as number,
+      });
     } else {
       setHover(null);
+      setClimateHover(null);
     }
   }, []);
 
@@ -219,7 +248,7 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
         }
         return;
       }
-      if (feat.layer?.id === "climate-heatmap") {
+      if (feat.layer?.id === "climate-fill") {
         // Click on a climate cell → load detail
         const geom = feat.geometry as unknown as { coordinates: [number, number] };
         const [lng, lat] = geom.coordinates;
@@ -266,10 +295,11 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
         mapStyle="mapbox://styles/mapbox/satellite-streets-v12"
         mapboxAccessToken={MAPBOX_TOKEN}
         interactiveLayerIds={[
-          ...(showClimateLayer && climateGrid ? ["climate-heatmap"] : []),
+          ...(showClimateLayer && climateGrid ? ["climate-fill"] : []),
           ...(showFootprints ? ["buildings-fill"] : []),
           ...(detectedBuildings.length > 0 ? ["cv-buildings-fill"] : []),
         ]}
+        onMoveEnd={handleMoveEnd}
         onMouseMove={onMouseMove}
         onMouseLeave={() => setHover(null)}
         onClick={onClick}
@@ -329,38 +359,25 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
           </AnimatePresence>
         </div>
 
-        {/* ── Global climate heatmap ── */}
+        {/* ── Global climate fill layer (polygon cells, continuous coverage) ── */}
         {showClimateLayer && climateGrid && (
           <Source id="climate-grid" type="geojson" data={climateGrid}>
             <Layer
-              id="climate-heatmap"
-              type="heatmap"
+              id="climate-fill"
+              type="fill"
               paint={{
-                // Weight each cell by its combined_heatmap_value
-                "heatmap-weight": [
+                "fill-color": [
                   "interpolate", ["linear"], ["get", "combined_heatmap_value"],
-                  0, 0,
-                  1, 1,
+                  0.00, "#0a2dff",   // deep blue  — very wet
+                  0.15, "#0080ff",   // blue
+                  0.30, "#00c8b4",   // teal
+                  0.45, "#50d840",   // green
+                  0.60, "#ffe000",   // yellow
+                  0.75, "#ff7200",   // orange
+                  0.90, "#ff1a00",   // red-orange
+                  1.00, "#8b0000",   // dark red   — extreme drought
                 ],
-                "heatmap-intensity": 1.5,
-                // Color: blue (wet/resilient) → yellow → red (dry/stressed)
-                "heatmap-color": [
-                  "interpolate", ["linear"], ["heatmap-density"],
-                  0,    "rgba(0,0,0,0)",
-                  0.05, "rgba(0,80,255,0.15)",
-                  0.25, "rgba(0,140,255,0.5)",
-                  0.45, "rgba(80,210,80,0.65)",
-                  0.65, "rgba(255,200,0,0.75)",
-                  0.85, "rgba(255,100,0,0.80)",
-                  1,    "rgba(200,0,0,0.90)",
-                ],
-                "heatmap-radius": [
-                  "interpolate", ["linear"], ["zoom"],
-                  1, 20,
-                  4, 35,
-                  8, 55,
-                ],
-                "heatmap-opacity": 0.78,
+                "fill-opacity": 0.72,
               }}
             />
           </Source>
@@ -573,11 +590,11 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
               </div>
             )}
 
-            {/* Rainfall toggle */}
+            {/* Rainfall toggle (Austin area, zoom in to see) */}
             <LayerToggle
               icon={<Droplets className="w-3.5 h-3.5 text-sky-400" />}
-              label="Rainfall Heatmap"
-              sub="Historical precipitation"
+              label="Austin Rainfall"
+              sub="Zoom to Austin to see"
               active={showRainfall}
               onChange={setShowRainfall}
               loading={rainfallLoading}
@@ -678,6 +695,43 @@ export default function MapView({ buildings, selectedId, onSelect, onDetect, onL
             building={selectedCVBuilding}
             onClose={() => setSelectedCVBuilding(null)}
           />
+        </div>
+      )}
+
+      {/* ── Climate hover tooltip ── */}
+      {climateHover && (
+        <div
+          className="pointer-events-none fixed z-50"
+          style={{ left: climateHover.x + 14, top: climateHover.y - 8 }}
+        >
+          <div className="glass rounded-lg px-3 py-2 text-xs min-w-[170px] shadow-xl border border-violet-500/30">
+            <p className="font-semibold text-violet-300 mb-1">
+              {climateDataSource === "precipitation" ? "Precipitation"
+               : climateDataSource === "drought" ? "Drought Risk"
+               : climateDataSource === "water_stress" ? "Water Stress"
+               : "Harvest Opportunity"}
+            </p>
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Annual rain</span>
+              <span className="font-mono text-sky-300">{climateHover.precip.toLocaleString()} mm</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Index</span>
+              <span
+                className="font-mono font-semibold"
+                style={{
+                  color: climateHover.value < 0.33 ? "#3b82f6"
+                    : climateHover.value < 0.66 ? "#f59e0b" : "#ef4444",
+                }}
+              >
+                {climateHover.value < 0.33 ? "Low stress"
+                  : climateHover.value < 0.66 ? "Moderate" : "High stress"}
+              </span>
+            </div>
+            <p className="text-[9px] text-slate-600 mt-1">
+              Click for full detail panel
+            </p>
+          </div>
         </div>
       )}
 
